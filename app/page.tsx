@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 
 // TypeScript 类型定义
 type Medication = {
@@ -75,6 +76,7 @@ export default function Home(): React.ReactElement {
   const [taken, setTaken] = useState<boolean>(false);
   const [btnDisabled, setBtnDisabled] = useState<boolean>(false);
   const [elderly, setElderly] = useState<ElderlyInfo>(DEFAULT_ELDERLY_INFO);
+  const router = useRouter();
 
   useEffect(() => {
     document.title = "老人用药提醒";
@@ -124,29 +126,25 @@ export default function Home(): React.ReactElement {
 
   function handleTaken() {
     if (!activeSchedule) return;
-    setTaken(true);
     setBtnDisabled(true);
 
-    const record: CheckInRecord = {
-      elderlyName: elderly.name,
-      scheduledTime: activeSchedule.time,
-      scheduledLabel: activeSchedule.label,
-      actualTimeISO: new Date().toISOString(),
-      status: "completed",
-    };
+    // 构造 meds 参数：[{name, dosage}] 并编码为 JSON 字符串
+    const medsForParam = activeSchedule.medications.map((m) => ({
+      name: m.name,
+      dosage: `${m.quantity}${m.unit ?? "片"}`,
+    }));
 
-    try {
-      const dateKey = new Date().toISOString().split("T")[0]; // YYYY-MM-DD
-      const storageKey = `checkIn_${dateKey}_${activeSchedule.time}`; // 例如 checkIn_2026-02-11_08:00
-      localStorage.setItem(storageKey, JSON.stringify(record));
-    } catch (e) {
-      // ignore storage errors
-    }
+    const params = new URLSearchParams();
+    params.set("name", elderly.name);
+    params.set("time", activeSchedule.time);
+    if (activeSchedule.label) params.set("label", activeSchedule.label);
+    params.set("meds", JSON.stringify(medsForParam));
 
-    // 2秒内禁用按钮，防止重复点击
+    const url = `/elderly/confirm?${params.toString()}`;
+    router.push(url);
+
+    // 保持原有的防重复点击体验：导航后 2 秒内按钮仍为禁用状态
     setTimeout(() => setBtnDisabled(false), 2000);
-
-    alert(`${elderly.name}，已记录服药，将同步给子女！`);
   }
 
   return (
