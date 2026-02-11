@@ -23,6 +23,7 @@ type CheckInRecord = {
   actualTimeISO: string;
   status: "completed" | string;
 };
+type CheckInRecordWithMeds = CheckInRecord & { meds?: Medication[] };
 
 export default function ConfirmPage(): React.ReactElement {
   const router = useRouter();
@@ -54,18 +55,29 @@ export default function ConfirmPage(): React.ReactElement {
   }, [medsRaw]);
 
   function saveCheckIn(status: "completed" | string) {
-    const record: CheckInRecord = {
+    const record: CheckInRecordWithMeds = {
       elderlyName,
       scheduledTime,
       scheduledLabel,
       actualTimeISO: new Date().toISOString(),
       status,
+      meds: medications,
     };
 
     try {
       const dateKey = new Date().toISOString().split("T")[0];
       const storageKey = `checkIn_${dateKey}_${scheduledTime}`; // 与主界面统一命名规则
       localStorage.setItem(storageKey, JSON.stringify(record));
+      // 追加到 elderlyInfo.records 中，保持主页面的近期记录数据
+      try {
+        const raw = localStorage.getItem("elderlyInfo");
+        const ei = raw ? JSON.parse(raw) : { name: elderlyName, plan: [], records: [] };
+        ei.records = ei.records ?? [];
+        ei.records.push(record);
+        localStorage.setItem("elderlyInfo", JSON.stringify(ei));
+      } catch (e) {
+        // ignore
+      }
     } catch (e) {
       // ignore
     }

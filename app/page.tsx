@@ -37,7 +37,8 @@ const SCHEDULE: ScheduleItem[] = [
 // 打卡记录的 key 格式: 'checkIn_YYYY-MM-DD_HH:MM'
 type ElderlyInfo = {
   name: string;
-  plan: ScheduleItem[]; // 用药计划
+  plans: ScheduleItem[]; // 用药计划
+  records?: CheckInRecord[]; // 近7天或历史打卡记录
 };
 
 type CheckInRecord = {
@@ -46,12 +47,14 @@ type CheckInRecord = {
   scheduledLabel?: string; // e.g. "上午 8:00"
   actualTimeISO: string;
   status: "completed" | string;
+  meds?: Medication[];
 };
 
 const DEFAULT_ELDERLY_INFO: ElderlyInfo = {
   // 可修改：默认老人姓名与用药计划
   name: "王阿姨",
-  plan: SCHEDULE,
+  plans: SCHEDULE,
+  records: [],
 };
 
 function parseHM(time: string) {
@@ -99,7 +102,11 @@ export default function Home(): React.ReactElement {
     try {
       const raw = localStorage.getItem("elderlyInfo");
       if (raw) {
-        const parsed = JSON.parse(raw) as ElderlyInfo;
+        const parsedRaw = JSON.parse(raw) as any;
+        // 兼容字段名 plan / plans，同步到 plans
+        parsedRaw.plans = parsedRaw.plans ?? parsedRaw.plan ?? [];
+        parsedRaw.records = parsedRaw.records ?? [];
+        const parsed = parsedRaw as ElderlyInfo;
         setElderly(parsed);
       } else {
         // 未配置过，但不是首次访问（例如用户清空过 elderlyInfo），保留默认值并不自动跳转
@@ -135,8 +142,8 @@ export default function Home(): React.ReactElement {
   const inEveningWindow = isNowInWindow(now, "19:00", "21:00");
 
   let activeSchedule: ScheduleItem | null = null;
-  if (inMorningWindow) activeSchedule = elderly.plan.find((s) => s.time === "08:00") ?? null;
-  else if (inEveningWindow) activeSchedule = elderly.plan.find((s) => s.time === "20:00") ?? null;
+  if (inMorningWindow) activeSchedule = elderly.plans.find((s) => s.time === "08:00") ?? null;
+  else if (inEveningWindow) activeSchedule = elderly.plans.find((s) => s.time === "20:00") ?? null;
 
   function handleTaken() {
     if (!activeSchedule) return;
@@ -222,6 +229,52 @@ export default function Home(): React.ReactElement {
         <footer className="mt-6 text-center text-sm text-zinc-500">
           如需修改用药时间或剂量，请咨询医生或家属帮助设置。
         </footer>
+
+        {/* 近7天用药记录模块 */}
+        <section className="mt-6 rounded-xl bg-white p-4 shadow-sm ring-1 ring-zinc-200">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold text-zinc-800">近7天用药记录</h2>
+            <div className="text-sm text-zinc-500">共 { (elderly.records ?? []).length } 条</div>
+          </div>
+
+          <div className="mt-3 space-y-2">
+            {((elderly.records ?? []).slice(-7).reverse()).length === 0 ? (
+              <div className="text-zinc-500 py-4 text-center">暂无记录</div>
+            ) : (
+              (elderly.records ?? []).slice(-7).reverse().map((r, idx) => (
+                <div
+                  key={r.actualTimeISO + idx}
+                  className="flex items-start justify-between rounded-lg border p-3"
+                >
+                  <div>
+                    <div className="text-sm text-zinc-700">
+                      {new Date(r.actualTimeISO).toLocaleString("zh-CN", {
+                        month: "2-digit",
+                        day: "2-digit",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })} - {r.scheduledLabel ?? r.scheduledTime}
+                    </div>
+                    <div className="mt-1 text-sm text-zinc-600">
+                      {r.meds && r.meds.length > 0
+                        ? r.meds.map((m) => `${m.name}×${m.quantity ?? 1}`).join("，")
+                        : "无详细药品信息"}
+                    </div>
+                  </div>
+                  <div className="ml-4">
+                    <span
+                      className={`inline-block px-3 py-1 rounded-full text-sm font-medium ${
+                        r.status === "completed" ? "bg-emerald-100 text-emerald-800" : "bg-yellow-100 text-yellow-800"
+                      }`}
+                    >
+                      {r.status === "completed" ? "已完成" : r.status}
+                    </span>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </section>
       </main>
     </div>
   );
