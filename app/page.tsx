@@ -81,14 +81,28 @@ export default function Home(): React.ReactElement {
   useEffect(() => {
     document.title = "老人用药提醒";
     const id = setInterval(() => setNow(new Date()), 1000);
-    // 页面加载时优先从 localStorage 读取老人信息；没有则写入默认值
+    // 优先判断是否首次访问（isFirstVisit）。
+    // 如果 localStorage 中没有 isFirstVisit 字段，则视为首次访问：
+    // 立即写入 isFirstVisit=false 并跳转到设置页，然后返回（不执行后续逻辑）。
+    try {
+      const first = localStorage.getItem("isFirstVisit");
+      if (first === null) {
+        localStorage.setItem("isFirstVisit", "false");
+        router.push("/elderly/settings");
+        return () => clearInterval(id);
+      }
+    } catch (e) {
+      // 若 localStorage 访问出错，继续执行后续逻辑（不跳转）
+    }
+
+    // 不是首次访问 —— 读取 elderlyInfo（但不再基于 plan 长度跳转）
     try {
       const raw = localStorage.getItem("elderlyInfo");
       if (raw) {
         const parsed = JSON.parse(raw) as ElderlyInfo;
         setElderly(parsed);
       } else {
-        localStorage.setItem("elderlyInfo", JSON.stringify(DEFAULT_ELDERLY_INFO));
+        // 未配置过，但不是首次访问（例如用户清空过 elderlyInfo），保留默认值并不自动跳转
         setElderly(DEFAULT_ELDERLY_INFO);
       }
     } catch (e) {
