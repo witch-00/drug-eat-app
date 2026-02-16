@@ -1,8 +1,8 @@
-import nextDynamic from "next/dynamic";
+"use client";
+
+import ConfirmClient from "./ConfirmClient";
 
 export const dynamic = "force-dynamic";
-
-const ConfirmClient = nextDynamic(() => import("./ConfirmClient"), { ssr: false });
 
 export default function Page() {
   return <ConfirmClient />;
