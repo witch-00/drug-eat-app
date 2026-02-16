@@ -23,16 +23,6 @@ type ElderlyInfo = {
   familyCode?: string;
 };
 
-const LS_KEY = "elderlyInfo"; // localStorage key
-const FAMILY_CODE_KEY = "familyCode";
-
-function randCode() {
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-  let s = "";
-  for (let i = 0; i < 8; i++) s += chars[Math.floor(Math.random() * chars.length)];
-  return `YAO-${s}`;
-}
-
 function uid() {
   return Math.random().toString(36).slice(2, 9);
 }
@@ -40,8 +30,13 @@ function uid() {
 export default function SettingsPage(): React.ReactElement {
   // 确保初始状态中 plans 始终为数组，避免首次渲染时访问 undefined
   const [elderly, setElderly] = useState<ElderlyInfo>({ name: "王阿姨", plans: [], familyCode: undefined });
+  const [elderlyId, setElderlyId] = useState<number | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
 
   // 表单字段
   const [nameInput, setNameInput] = useState("");
@@ -56,35 +51,39 @@ export default function SettingsPage(): React.ReactElement {
   const router = useRouter();
 
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(LS_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as ElderlyInfo;
-        // 确保 plans 字段存在且为数组，防止 undefined
-        parsed.plans = parsed.plans ?? [];
-        setElderly(parsed);
-        setNameInput(parsed.name ?? "");
-        if (parsed.familyCode) setFamilyCode(parsed.familyCode);
-      } else {
-        // 初始化为空数据（plans 已由初始 state 保证）
-        setElderly((prev) => ({ ...prev, name: "" }));
+    const load = async () => {
+      setLoading(true);
+      setError(null);
+      setSuccess(null);
+      try {
+        await fetch("/api/user/me");
+        const settingsRes = await fetch("/api/user/settings");
+        if (!settingsRes.ok) {
+          throw new Error("获取用户设置失败");
+        }
+        const settings = await settingsRes.json();
+        const defaultId = settings?.default_elderly_id as number | null;
+        if (defaultId) {
+          const elderlyRes = await fetch(`/api/elderly?id=${defaultId}`);
+          if (!elderlyRes.ok) {
+            throw new Error("获取老人信息失败");
+          }
+          const data = await elderlyRes.json();
+          setElderlyId(data.id ?? null);
+          setFamilyCode(data.familyCode ?? null);
+          setElderly({ name: data.name ?? "", plans: data.plans ?? [], familyCode: data.familyCode ?? undefined });
+          setNameInput(data.name ?? "");
+        } else {
+          setElderly((prev) => ({ ...prev, name: "" }));
+        }
+      } catch {
+        setError("加载数据失败，请刷新重试");
+      } finally {
+        setLoading(false);
       }
-    } catch (e) {
-      setElderly((prev) => ({ ...prev, name: "" }));
-    }
+    };
 
-    // family code
-    try {
-      const fc = localStorage.getItem(FAMILY_CODE_KEY);
-      if (fc) setFamilyCode(fc);
-      else {
-        const gen = randCode();
-        localStorage.setItem(FAMILY_CODE_KEY, gen);
-        setFamilyCode(gen);
-      }
-    } catch (e) {
-      // ignore
-    }
+    load();
   }, []);
 
   // 表单验证
@@ -93,11 +92,6 @@ export default function SettingsPage(): React.ReactElement {
   }, [medName, quantity, times]);
 
   function persistElderly(next: ElderlyInfo) {
-    try {
-      localStorage.setItem(LS_KEY, JSON.stringify(next));
-    } catch (e) {
-      // ignore
-    }
     setElderly(next);
   }
 
@@ -169,11 +163,65 @@ export default function SettingsPage(): React.ReactElement {
     try {
       navigator.clipboard.writeText(familyCode);
       alert("复制成功");
-    } catch (e) {
+    } catch {
       alert("复制失败，请手动复制：" + familyCode);
     }
   }
 
+  async function saveElderlyToApi() {
+    setSaving(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const payload = {
+        id: elderlyId,
+        name: nameInput.trim() || elderly.name,
+        plans: elderly.plans,
+        familyCode,
+      };
+
+      const res = await fetch("/api/elderly", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        let message = "保存老人信息失败";
+        try {
+          const err = await res.json();
+          if (err?.error) message = err.error;
+        } catch {
+          // ignore
+        }
+        throw new Error(message);
+      }
+
+      const data = await res.json();
+      setElderlyId(data.id ?? null);
+      setFamilyCode(data.familyCode ?? null);
+      setElderly({ name: data.name ?? "", plans: data.plans ?? [], familyCode: data.familyCode ?? undefined });
+      setNameInput(data.name ?? "");
+
+      setSuccess("保存成功，家庭查看码已更新");
+
+      if (data.id) {
+        await fetch("/api/user/settings", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ default_elderly_id: data.id }),
+        });
+      }
+
+      return data.id as number;
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "保存失败，请稍后重试";
+      setError(message);
+      return null;
+    } finally {
+      setSaving(false);
+    }
+  }
   // 完成配置并返回主页面：保存当前用药计划并跳转
   function handleFinishAndReturn() {
     if (!elderly || !(elderly.plans && elderly.plans.length > 0)) {
@@ -181,14 +229,15 @@ export default function SettingsPage(): React.ReactElement {
       return;
     }
 
-    // 保存到 localStorage
-    persistElderly(elderly);
-
-    alert("用药计划已保存，返回首页");
-    router.push("/");
+    saveElderlyToApi().then((id) => {
+      if (id) {
+        alert("用药计划已保存，返回首页");
+        router.push("/");
+      }
+    });
   }
 
-  if (!elderly) return <div className="p-6">加载中…</div>;
+  if (loading) return <div className="p-6">加载中…</div>;
 
   return (
     <div className="min-h-screen bg-white p-6 sm:p-8">
@@ -203,6 +252,13 @@ export default function SettingsPage(): React.ReactElement {
             添加药品
           </button>
         </header>
+
+        {error ? (
+          <div className="mb-4 rounded-lg bg-red-50 text-red-700 px-4 py-3">{error}</div>
+        ) : null}
+        {success ? (
+          <div className="mb-4 rounded-lg bg-emerald-50 text-emerald-700 px-4 py-3">{success}</div>
+        ) : null}
 
         <section className="mb-6">
           {elderly.plans.length === 0 ? (
@@ -316,19 +372,28 @@ export default function SettingsPage(): React.ReactElement {
 
         <section className="mt-8 text-center">
           <h2 className="text-2xl font-bold text-black">您的家庭查看码</h2>
-          <div className="mt-3 text-2xl font-bold text-black">{familyCode}</div>
+          <div className="mt-3 text-2xl font-bold text-black">{familyCode ?? "保存后生成"}</div>
           <div className="mt-2 text-[16px] text-[#333333]">请将此码告诉子女，他们可以随时查看您的用药记录</div>
           <div className="mt-4 flex justify-center gap-4">
-            <button onClick={handleCopyCode} className="bg-gray-200 px-4 py-2 rounded text-lg">点击复制查看码</button>
+            <button
+              onClick={handleCopyCode}
+              disabled={!familyCode}
+              className={`bg-gray-200 px-4 py-2 rounded text-lg ${!familyCode ? "opacity-50" : ""}`}
+            >
+              点击复制查看码
+            </button>
             <button onClick={() => alert("请将复制的查看码发给子女")} className="bg-green-200 px-4 py-2 rounded text-lg">分享到微信</button>
           </div>
         </section>
         <div className="mt-8 flex justify-center">
           <button
             onClick={handleFinishAndReturn}
-            className="w-4/5 rounded-xl bg-emerald-600 text-white text-2xl sm:text-3xl py-4 shadow-lg"
+            disabled={saving}
+            className={`w-4/5 rounded-xl text-white text-2xl sm:text-3xl py-4 shadow-lg ${
+              saving ? "bg-emerald-300" : "bg-emerald-600"
+            }`}
           >
-            完成并返回
+            {saving ? "保存中..." : "完成并返回"}
           </button>
         </div>
       </div>

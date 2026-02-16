@@ -1,5 +1,5 @@
-export const dynamic = "force-dynamic";
 "use client";
+export const dynamic = "force-dynamic";
 import React, { useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
@@ -13,11 +13,11 @@ export default function ConfirmPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [btnDisabled, setBtnDisabled] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // 读取URL参数
   const elderlyName = searchParams.get("name") ?? "老人";
-  const scheduledTime = searchParams.get("time") ?? "08:00";
   const medsRaw = searchParams.get("meds") ?? "";
 
   // 解析药品列表
@@ -26,7 +26,7 @@ export default function ConfirmPage() {
     try {
       const parsed = JSON.parse(medsRaw);
       return Array.isArray(parsed) ? parsed : [];
-    } catch (e) {
+    } catch {
       return medsRaw.split("|").map(s => {
         const match = s.trim().match(/(.+)\s*[x×]\s*(\d+)/);
         return match ? { name: match[1].trim(), quantity: parseInt(match[2]) } : { name: s.trim(), quantity: 1 };
@@ -34,43 +34,78 @@ export default function ConfirmPage() {
     }
   }, [medsRaw]);
 
-  // 调用你的/api/medication保存数据
-  async function saveCheckIn(status: "completed" | "remind_later") {
-    setLoading(true);
+  async function resolveElderlyId(): Promise<number | null> {
     try {
-      const res = await fetch("/api/medication", { // 改这里！用你的API路径
+      await fetch("/api/user/me");
+      const settingsRes = await fetch("/api/user/settings");
+      if (!settingsRes.ok) return null;
+      const settings = await settingsRes.json();
+      const defaultId = settings?.default_elderly_id as number | null;
+      return defaultId ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  // 调用 /api/medication 保存数据
+  async function saveCheckIn(status: "done" | "undone") {
+    setSaving(true);
+    setError(null);
+    try {
+      const elderlyId = await resolveElderlyId();
+      if (!elderlyId) {
+        setError("未找到老人信息，请先在设置页完成配置");
+        return false;
+      }
+
+      const recordDate = new Date().toISOString().split("T")[0];
+      const res = await fetch("/api/medication", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ elderlyName, scheduledTime, status, meds: medications }),
+        body: JSON.stringify({ elderly_id: elderlyId, record_date: recordDate, status }),
       });
       if (!res.ok) throw new Error("保存失败");
-    } catch (e) {
-      alert("保存记录失败，请重试");
+      return true;
+    } catch {
+      setError("保存记录失败，请重试");
+      return false;
     } finally {
-      setLoading(false);
+      setSaving(false);
     }
   }
 
   // 确认服药
   async function handleConfirm() {
-    if (btnDisabled || loading) return;
+    if (btnDisabled || saving) return;
     setBtnDisabled(true);
-    await saveCheckIn("completed");
-    alert("已确认服药，即将返回");
-    setTimeout(() => router.push("/"), 2000);
+    const ok = await saveCheckIn("done");
+    if (ok) {
+      alert("已确认服药，即将返回");
+      setTimeout(() => router.push("/"), 2000);
+    } else {
+      setBtnDisabled(false);
+    }
   }
 
   // 稍后提醒
-  function handleRemindLater() {
-    if (btnDisabled || loading) return;
+  async function handleRemindLater() {
+    if (btnDisabled || saving) return;
     setBtnDisabled(true);
-    alert("30分钟后再次提醒");
-    setTimeout(() => router.push("/"), 2000);
+    const ok = await saveCheckIn("undone");
+    if (ok) {
+      alert("30分钟后再次提醒");
+      setTimeout(() => router.push("/"), 2000);
+    } else {
+      setBtnDisabled(false);
+    }
   }
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-100 p-4">
       <div className="w-full max-w-xl bg-white rounded-xl shadow-lg p-6">
+        {error ? (
+          <div className="mb-4 rounded-lg bg-red-50 text-red-700 px-4 py-3">{error}</div>
+        ) : null}
         <h1 className="text-2xl font-bold mb-4">
           {elderlyName}，您确定吃过
           {medications.length > 0 ? (
@@ -83,17 +118,17 @@ export default function ConfirmPage() {
         <div className="mt-6 flex gap-4 justify-center">
           <button
             onClick={handleConfirm}
-            disabled={btnDisabled || loading}
+            disabled={btnDisabled || saving}
             style={{ flexBasis: "70%" }}
-            className={`rounded-xl py-4 text-white text-2xl ${btnDisabled || loading ? "bg-emerald-300" : "bg-emerald-600 hover:bg-emerald-700"}`}
+            className={`rounded-xl py-4 text-white text-2xl ${btnDisabled || saving ? "bg-emerald-300" : "bg-emerald-600 hover:bg-emerald-700"}`}
           >
-            {loading ? "保存中..." : "是的，吃好了"}
+            {saving ? "保存中..." : "是的，吃好了"}
           </button>
           <button
             onClick={handleRemindLater}
-            disabled={btnDisabled || loading}
+            disabled={btnDisabled || saving}
             style={{ flexBasis: "30%" }}
-            className={`rounded-xl py-4 text-white text-2xl ${btnDisabled || loading ? "bg-gray-300 text-gray-700" : "bg-gray-500 hover:bg-gray-600"}`}
+            className={`rounded-xl py-4 text-white text-2xl ${btnDisabled || saving ? "bg-gray-300 text-gray-700" : "bg-gray-500 hover:bg-gray-600"}`}
           >
             还没吃
             <span className="block text-base">等会儿提醒</span>
